@@ -1,6 +1,6 @@
 ---
-title: "Gaming Headset Sales Analysis: Single-Person Households"
-subtitle: "Correlation Between Living Alone and Gaming Headset Sales in Swiss Cantons"
+title: "Single-Person Household Product Analysis"
+subtitle: "E-Readers, Coffee Machines & Microwaves in Swiss Cantons"
 format:
   html:
     code-fold: true
@@ -17,21 +17,29 @@ execute:
 
 # Executive Summary
 
-This analysis investigates the correlation between the proportion of single-person households and gaming headset sales in Swiss cantons.
+This analysis investigates the correlation between the proportion of single-person households and sales of three product categories in Swiss cantons:
+- **E-Readers** (481 sales)
+- **Coffee Machines** (170 sales)
+- **Microwaves** (145 sales)
 
-**Research question**: Is there a correlation between single-person household rates and per-capita gaming headset sales?
+**Research question**: Which of these products shows the strongest correlation with single-person household rates?
 
-**Hypothesis**: The higher the proportion of people living alone, the higher the demand for gaming headsets.
+**Hypothesis**: Products typically used by individuals living alone will show higher per-capita sales in cantons with more single-person households.
 
 # 1. Data & Method
 
-We analyze sales data from Digitec Galaxus for gaming headsets and compare them with single-person household rates across Swiss cantons.
+We analyze sales data from Digitec Galaxus for three product categories and compare them with single-person household rates across Swiss cantons.
+
+**Product categories**:
+1. **E-Readers** (ereader-1138): Digital reading devices - potentially popular with solo readers
+2. **Coffee Machines** (kaffeevollautomat-125): Single-serve capability - convenient for one person
+3. **Microwaves** (mikrowelle-130): Quick individual meals - typical for solo living
 
 **Data sources**:
-- Gaming headset sales by canton (Digitec Galaxus)
-- Single-person household rates and population by canton (Einpersonenhaushalt.csv)
+- Product sales by canton (Digitec Galaxus)
+- Single-person household rates and population by canton (BFS 2024)
 
-**Method**: Pearson correlation between single-person household percentage and sales per 5,000 residents.
+**Method**: Pearson correlation between single-person household percentage and sales per 5,000 residents for each product category.
 
 # 2. Data Preparation
 
@@ -67,34 +75,27 @@ kable(household_data,
 ```
 
 ```{r filter-gaming-headsets}
-# Filter for gaming headsets
-# Search for gaming headsets in categories and product names
-gaming_headset_keywords <- c("gaming.*headset", "gaming.*kopfhörer", "gaming.*kopfhoerer")
-pattern <- paste(gaming_headset_keywords, collapse = "|")
+# Filter for three product categories
+ereader_sales <- sales_data %>%
+  filter(`infos.Category` == "ereader-1138")
 
-gaming_sales <- sales_data %>%
-  filter(
-    str_detect(tolower(`infos.Category`), pattern) |
-    str_detect(tolower(fullProductName), pattern)
-  )
+coffee_sales <- sales_data %>%
+  filter(`infos.Category` == "kaffeevollautomat-125")
 
-# Get unique cantons from sales data
-cat(sprintf("Total gaming headset sales: %d\n", nrow(gaming_sales)))
-cat(sprintf("Unique cantons in sales data: %d\n", 
-            length(unique(gaming_sales$canton))))
+microwave_sales <- sales_data %>%
+  filter(`infos.Category` == "mikrowelle-130")
+
+# Display sample counts
+cat("E-Readers:", nrow(ereader_sales), "sales\n")
+cat("Coffee Machines:", nrow(coffee_sales), "sales\n")
+cat("Microwaves:", nrow(microwave_sales), "sales\n")
+cat("\nUnique cantons in data:", length(unique(sales_data$canton)), "\n")
 ```
 
 # 3. Results
 
 ```{r analysis}
-# Aggregate sales by canton
-sales_by_canton <- gaming_sales %>%
-  group_by(canton) %>%
-  summarise(Total_Sales = n(), .groups = 'drop') %>%
-  rename(Canton = canton)
-
-# Merge with household data
-# Map canton abbreviations to full names
+# Prepare canton mapping
 canton_mapping <- c(
   "ZH" = "Zürich", "BE" = "Bern", "LU" = "Luzern", "UR" = "Uri",
   "SZ" = "Schwyz", "OW" = "Obwalden", "NW" = "Nidwalden", "GL" = "Glarus",
@@ -105,62 +106,105 @@ canton_mapping <- c(
   "VS" = "Wallis", "NE" = "Neuenburg", "GE" = "Genf", "JU" = "Jura"
 )
 
-sales_by_canton <- sales_by_canton %>%
-  mutate(Canton_Full = canton_mapping[Canton])
+# Function to aggregate sales by canton
+aggregate_by_canton <- function(sales_df, product_name) {
+  sales_df %>%
+    group_by(canton) %>%
+    summarise(Total_Sales = n(), .groups = 'drop') %>%
+    mutate(Canton_Full = canton_mapping[canton]) %>%
+    select(Canton_Full, Total_Sales) %>%
+    rename(!!product_name := Total_Sales)
+}
 
+# Aggregate each product category
+ereader_agg <- aggregate_by_canton(ereader_sales, "EReader_Sales")
+coffee_agg <- aggregate_by_canton(coffee_sales, "Coffee_Sales")
+microwave_agg <- aggregate_by_canton(microwave_sales, "Microwave_Sales")
+
+# Merge all products with household data
 analysis_data <- household_data %>%
-  left_join(sales_by_canton, by = c("Canton" = "Canton_Full")) %>%
-  filter(!is.na(Total_Sales)) %>%
-  mutate(Sales_per_5k = (Total_Sales / Population) * 5000)
+  left_join(ereader_agg, by = c("Canton" = "Canton_Full")) %>%
+  left_join(coffee_agg, by = c("Canton" = "Canton_Full")) %>%
+  left_join(microwave_agg, by = c("Canton" = "Canton_Full")) %>%
+  mutate(
+    EReader_Sales = replace_na(EReader_Sales, 0),
+    Coffee_Sales = replace_na(Coffee_Sales, 0),
+    Microwave_Sales = replace_na(Microwave_Sales, 0),
+    EReader_per_5k = (EReader_Sales / Population) * 5000,
+    Coffee_per_5k = (Coffee_Sales / Population) * 5000,
+    Microwave_per_5k = (Microwave_Sales / Population) * 5000
+  )
 
 kable(analysis_data %>% 
-        select(Canton, Single_Household_Pct, Population, Sales_per_5k) %>%
+        select(Canton, Single_Household_Pct, EReader_per_5k, Coffee_per_5k, Microwave_per_5k) %>%
         arrange(desc(Single_Household_Pct)), 
       digits = 2,
-      format.args = list(big.mark = "'"),
-      col.names = c("Canton", "Single HH %", "Population", "Sales per 5k"),
-      caption = "Gaming Headset Sales per 5,000 Residents by Canton")
+      col.names = c("Canton", "Single HH %", "E-Reader", "Coffee", "Microwave"),
+      caption = "Product Sales per 5,000 Residents by Canton")
 ```
 
-```{r plot, fig.width=10, fig.height=6}
-# Visualization
-ggplot(analysis_data, aes(x = Single_Household_Pct, y = Sales_per_5k)) +
-  geom_point(aes(color = Canton), size = 5, alpha = 0.7) +
-  geom_smooth(method = "lm", se = TRUE, color = "red", linetype = "dashed") +
-  geom_text(aes(label = Canton), vjust = -1.2, size = 3) +
+```{r plot, fig.width=12, fig.height=10}
+# Prepare data for plotting
+plot_data <- analysis_data %>%
+  select(Canton, Single_Household_Pct, EReader_per_5k, Coffee_per_5k, Microwave_per_5k) %>%
+  pivot_longer(
+    cols = c(EReader_per_5k, Coffee_per_5k, Microwave_per_5k),
+    names_to = "Product",
+    values_to = "Sales_per_5k"
+  ) %>%
+  mutate(Product = case_when(
+    Product == "EReader_per_5k" ~ "E-Reader",
+    Product == "Coffee_per_5k" ~ "Coffee Machine",
+    Product == "Microwave_per_5k" ~ "Microwave"
+  ))
+
+# Visualization with facets
+ggplot(plot_data, aes(x = Single_Household_Pct, y = Sales_per_5k)) +
+  geom_point(aes(color = Product), size = 3, alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE, color = "darkgray", linetype = "dashed", linewidth = 0.8) +
+  facet_wrap(~Product, scales = "free_y", ncol = 1) +
   labs(
-    title = "Gaming Headset Sales vs. Single-Person Household Rate",
+    title = "Product Sales vs. Single-Person Household Rate by Canton",
     x = "Single-Person Household Rate (%)",
-    y = "Gaming Headset Sales per 5,000 Residents"
+    y = "Sales per 5,000 Residents"
   ) +
   theme_minimal() +
-  theme(legend.position = "none")
+  theme(
+    legend.position = "none",
+    strip.text = element_text(size = 12, face = "bold")
+  )
 ```
 
 ```{r correlation}
-# Correlation analysis
-cor_result <- cor.test(analysis_data$Single_Household_Pct, 
-                       analysis_data$Sales_per_5k, 
-                       method = "pearson")
+# Correlation analysis for all three products
+cor_ereader <- cor.test(analysis_data$Single_Household_Pct, analysis_data$EReader_per_5k)
+cor_coffee <- cor.test(analysis_data$Single_Household_Pct, analysis_data$Coffee_per_5k)
+cor_microwave <- cor.test(analysis_data$Single_Household_Pct, analysis_data$Microwave_per_5k)
 
-cat(sprintf("Correlation coefficient (r): %.3f\n", cor_result$estimate))
-cat(sprintf("p-value: %.4f\n", cor_result$p.value))
-cat(sprintf("Result: %s\n", 
-            ifelse(cor_result$p.value < 0.05, 
-                   "Significant correlation (p < 0.05)", 
-                   "No significant correlation")))
+# Create summary table
+correlation_summary <- data.frame(
+  Product = c("E-Reader", "Coffee Machine", "Microwave"),
+  Correlation = c(cor_ereader$estimate, cor_coffee$estimate, cor_microwave$estimate),
+  P_Value = c(cor_ereader$p.value, cor_coffee$p.value, cor_microwave$p.value),
+  Significant = c(
+    ifelse(cor_ereader$p.value < 0.05, "Yes", "No"),
+    ifelse(cor_coffee$p.value < 0.05, "Yes", "No"),
+    ifelse(cor_microwave$p.value < 0.05, "Yes", "No")
+  )
+)
 
-# Linear regression
-model <- lm(Sales_per_5k ~ Single_Household_Pct, data = analysis_data)
-cat(sprintf("\nR²: %.3f (%.1f%% variance explained)\n", 
-            summary(model)$r.squared,
-            summary(model)$r.squared * 100))
+kable(correlation_summary,
+      digits = 4,
+      col.names = c("Product", "Correlation (r)", "p-value", "Significant (p<0.05)"),
+      caption = "Correlation Results: Single-Person Households vs. Product Sales")
 ```
 
-```{r correlation-matrix, fig.width=8, fig.height=6}
-# Correlation matrix
+```{r correlation-matrix, fig.width=10, fig.height=8}
+# Correlation matrix for all variables
 cor_data <- analysis_data %>%
-  select(Single_Household_Pct, Population, Sales_per_5k)
+  select(Single_Household_Pct, EReader_per_5k, Coffee_per_5k, Microwave_per_5k)
+
+colnames(cor_data) <- c("Single HH %", "E-Reader", "Coffee", "Microwave")
 
 cor_matrix <- cor(cor_data, use = "complete.obs")
 
@@ -170,45 +214,51 @@ corrplot(cor_matrix,
          addCoef.col = "black",
          tl.col = "black",
          tl.srt = 45,
-         title = "Correlation Matrix",
+         number.cex = 1.2,
+         title = "Correlation Matrix: All Products",
          mar = c(0, 0, 2, 0))
 ```
 
 ```{r canton-ranking}
-# Canton ranking
+# Canton ranking by single-household rate
 ranking <- analysis_data %>%
-  mutate(
-    HH_Rank = rank(-Single_Household_Pct),
-    Sales_Rank = rank(-Sales_per_5k)
-  ) %>%
-  select(Canton, Single_Household_Pct, HH_Rank, Sales_per_5k, Sales_Rank) %>%
-  arrange(HH_Rank)
+  select(Canton, Single_Household_Pct, EReader_per_5k, Coffee_per_5k, Microwave_per_5k) %>%
+  arrange(desc(Single_Household_Pct))
 
 kable(ranking, 
       digits = 2,
-      col.names = c("Canton", "Single HH %", "HH Rank", 
-                    "Sales per 5k", "Sales Rank"),
-      caption = "Canton Ranking by Single Households and Gaming Headset Sales")
+      col.names = c("Canton", "Single HH %", "E-Reader", "Coffee", "Microwave"),
+      caption = "Canton Ranking by Single-Household Rate with Product Sales per 5k")
 ```
 
 # 4. Conclusion
 
-**Hypothesis**: The higher the proportion of people living alone, the higher the demand for gaming headsets.
+**Research Question**: Which product shows the strongest correlation with single-person household rates?
 
-**Result**: `r ifelse(cor_result$p.value < 0.05, "CONFIRMED", "NOT CONFIRMED")` (r = `r round(cor_result$estimate, 3)`, p = `r round(cor_result$p.value, 4)`)
+**Results**:
+- **E-Reader**: r = `r round(cor_ereader$estimate, 3)`, p = `r round(cor_ereader$p.value, 4)` - `r ifelse(cor_ereader$p.value < 0.05, "SIGNIFICANT ✓", "NOT SIGNIFICANT")`
+- **Coffee Machine**: r = `r round(cor_coffee$estimate, 3)`, p = `r round(cor_coffee$p.value, 4)` - `r ifelse(cor_coffee$p.value < 0.05, "SIGNIFICANT ✓", "NOT SIGNIFICANT")`
+- **Microwave**: r = `r round(cor_microwave$estimate, 3)`, p = `r round(cor_microwave$p.value, 4)` - `r ifelse(cor_microwave$p.value < 0.05, "SIGNIFICANT ✓", "NOT SIGNIFICANT")`
 
-**Key findings**:
+**Key Findings**:
 - Canton with highest single-household rate: `r analysis_data %>% arrange(desc(Single_Household_Pct)) %>% slice(1) %>% pull(Canton)` (`r round(analysis_data %>% arrange(desc(Single_Household_Pct)) %>% slice(1) %>% pull(Single_Household_Pct), 1)`%)
-- Gaming headset sales range: `r round(min(analysis_data$Sales_per_5k), 2)` - `r round(max(analysis_data$Sales_per_5k), 2)` per 5k residents
+- Strongest correlation product: `r correlation_summary %>% arrange(desc(abs(Correlation))) %>% slice(1) %>% pull(Product)`
 
-**Interpretation**: `r ifelse(abs(cor_result$estimate) > 0.5, "Strong", ifelse(abs(cor_result$estimate) > 0.3, "Moderate", "Weak"))` `r ifelse(cor_result$estimate > 0, "positive", "negative")` correlation between single-person household rate and gaming headset sales.
+**Interpretation**:
+`r if(any(correlation_summary$P_Value < 0.05)) {
+  sig_products <- correlation_summary %>% filter(P_Value < 0.05) %>% pull(Product)
+  paste0("Significant correlation found for: ", paste(sig_products, collapse = ", "), ". ")
+} else {
+  "No significant correlations found. "
+}`
+`r paste0("The ", correlation_summary %>% arrange(desc(abs(Correlation))) %>% slice(1) %>% pull(Product), " shows the strongest (", ifelse(correlation_summary %>% arrange(desc(abs(Correlation))) %>% slice(1) %>% pull(Correlation) > 0, "positive", "negative"), ") relationship with single-person households.")`
 
 **Possible explanations**:
-1. **Lifestyle**: People living alone may spend more time gaming
-2. **Urbanization**: High single-household rates often in cities with higher purchasing power
-3. **Age demographics**: Younger people living alone are more likely to game
-4. **Privacy**: Need for headsets when living with others vs. alone
+1. **Urban lifestyle**: Higher single-household rates in cities correlate with different consumer behaviors
+2. **Demographics**: Age and income of people living alone influence product preferences
+3. **Living space**: Smaller apartments may drive demand for compact appliances
+4. **Independence**: Solo living requires individual-sized appliances and personal devices
 
 ---
 
-**Data**: Digitec Galaxus (Gaming Headsets), BFS (Single-Person Households 2024)
+**Data**: Digitec Galaxus (E-Readers, Coffee Machines, Microwaves), BFS (Single-Person Households 2024)
