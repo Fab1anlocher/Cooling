@@ -1,6 +1,6 @@
 ---
-title: "Climate-Based Sales Analysis: Fans and Cooling Devices"
-subtitle: "Temperature Impact on Product Sales in Swiss Cities"
+title: "Gaming Headset Sales Analysis: Single-Person Households"
+subtitle: "Correlation Between Living Alone and Gaming Headset Sales in Swiss Cantons"
 format:
   html:
     code-fold: true
@@ -17,19 +17,21 @@ execute:
 
 # Executive Summary
 
-This analysis investigates the correlation between temperature and sales of cooling products (fans and air conditioners) in eight Swiss cities.
+This analysis investigates the correlation between the proportion of single-person households and gaming headset sales in Swiss cantons.
 
-**Research question**: Is there a correlation between temperature and per-capita sales of cooling products?
+**Research question**: Is there a correlation between single-person household rates and per-capita gaming headset sales?
+
+**Hypothesis**: The higher the proportion of people living alone, the higher the demand for gaming headsets.
 
 # 1. Data & Method
 
-We analyze sales data from Digitec Galaxus for two product categories:
-- **ventilator-168** (Fans)
-- **klimaanlage-280** (Air conditioners)
+We analyze sales data from Digitec Galaxus for gaming headsets and compare them with single-person household rates across Swiss cantons.
 
-**Cities analyzed** (8): Zürich, Bern, Luzern, Basel, St. Gallen, Lugano, Lausanne, Genf
+**Data sources**:
+- Gaming headset sales by canton (Digitec Galaxus)
+- Single-person household rates and population by canton (Einpersonenhaushalt.csv)
 
-**Method**: Pearson correlation between average temperature (warmest month) and sales per 5,000 residents.
+**Method**: Pearson correlation between single-person household percentage and sales per 5,000 residents.
 
 # 2. Data Preparation
 
@@ -46,59 +48,90 @@ theme_set(theme_minimal())
 ```
 
 ```{r load-data}
-# Load data
-temp_data <- read_delim("Temparatur und Anzahl Personen.csv", 
-                        delim = ";", locale = locale(encoding = "UTF-8"))
-colnames(temp_data) <- c("City", "Population", "Temperature")
+# Load household data
+household_data <- read_delim("Einpersonenhaushalt.csv", 
+                             delim = ";", 
+                             locale = locale(encoding = "UTF-8"))
 
+# Rename columns for easier handling
+colnames(household_data) <- c("Canton_ID", "Canton", "Single_Household_Pct", "Population")
+
+# Load sales data
 sales_data <- read_csv("DigitecLive_Cleaned.csv",
                        locale = locale(encoding = "UTF-8"))
+
+kable(household_data, 
+      digits = 1,
+      format.args = list(big.mark = "'"),
+      caption = "Single-Person Household Rates by Canton")
 ```
 
-```{r filter-cooling-products}
-# Filter for specific cooling product categories
-cooling_sales <- sales_data %>%
-  filter(`infos.Category` %in% c("ventilator-168", "klimaanlage-280"))
+```{r filter-gaming-headsets}
+# Filter for gaming headsets
+# Search for gaming headsets in categories and product names
+gaming_headset_keywords <- c("gaming.*headset", "gaming.*kopfhörer", "gaming.*kopfhoerer")
+pattern <- paste(gaming_headset_keywords, collapse = "|")
 
-# Filter for target cities
-target_cities <- c("Zürich", "Bern", "Luzern", "Basel", 
-                   "St. Gallen", "Lugano", "Lausanne", "Genf")
+gaming_sales <- sales_data %>%
+  filter(
+    str_detect(tolower(`infos.Category`), pattern) |
+    str_detect(tolower(fullProductName), pattern)
+  )
 
-cooling_sales_filtered <- cooling_sales %>%
-  filter(cityName_clean %in% target_cities)
-
-cat(sprintf("Total products: %d\n", nrow(cooling_sales_filtered)))
+# Get unique cantons from sales data
+cat(sprintf("Total gaming headset sales: %d\n", nrow(gaming_sales)))
+cat(sprintf("Unique cantons in sales data: %d\n", 
+            length(unique(gaming_sales$canton))))
 ```
 
 # 3. Results
 
 ```{r analysis}
-# Aggregate sales by city and calculate per-capita sales
-sales_by_city <- cooling_sales_filtered %>%
-  group_by(cityName_clean) %>%
+# Aggregate sales by canton
+sales_by_canton <- gaming_sales %>%
+  group_by(canton) %>%
   summarise(Total_Sales = n(), .groups = 'drop') %>%
-  rename(City = cityName_clean) %>%
-  left_join(temp_data, by = "City") %>%
+  rename(Canton = canton)
+
+# Merge with household data
+# Map canton abbreviations to full names
+canton_mapping <- c(
+  "ZH" = "Zürich", "BE" = "Bern", "LU" = "Luzern", "UR" = "Uri",
+  "SZ" = "Schwyz", "OW" = "Obwalden", "NW" = "Nidwalden", "GL" = "Glarus",
+  "ZG" = "Zug", "FR" = "Freiburg", "SO" = "Solothurn", "BS" = "Basel-Stadt",
+  "BL" = "Basel-Landschaft", "SH" = "Schaffhausen", "AR" = "Appenzell Ausserrhoden",
+  "AI" = "Appenzell Innerrhoden", "SG" = "St. Gallen", "GR" = "Graubünden",
+  "AG" = "Aargau", "TG" = "Thurgau", "TI" = "Tessin", "VD" = "Waadt",
+  "VS" = "Wallis", "NE" = "Neuenburg", "GE" = "Genf", "JU" = "Jura"
+)
+
+sales_by_canton <- sales_by_canton %>%
+  mutate(Canton_Full = canton_mapping[Canton])
+
+analysis_data <- household_data %>%
+  left_join(sales_by_canton, by = c("Canton" = "Canton_Full")) %>%
+  filter(!is.na(Total_Sales)) %>%
   mutate(Sales_per_5k = (Total_Sales / Population) * 5000)
 
-kable(sales_by_city %>% 
-        select(City, Temperature, Sales_per_5k) %>%
-        arrange(desc(Temperature)), 
+kable(analysis_data %>% 
+        select(Canton, Single_Household_Pct, Population, Sales_per_5k) %>%
+        arrange(desc(Single_Household_Pct)), 
       digits = 2,
-      col.names = c("City", "Temp (°C)", "Sales per 5k"),
-      caption = "Sales per 5,000 Residents by City")
+      format.args = list(big.mark = "'"),
+      col.names = c("Canton", "Single HH %", "Population", "Sales per 5k"),
+      caption = "Gaming Headset Sales per 5,000 Residents by Canton")
 ```
 
 ```{r plot, fig.width=10, fig.height=6}
 # Visualization
-ggplot(sales_by_city, aes(x = Temperature, y = Sales_per_5k)) +
-  geom_point(aes(color = City), size = 5, alpha = 0.7) +
+ggplot(analysis_data, aes(x = Single_Household_Pct, y = Sales_per_5k)) +
+  geom_point(aes(color = Canton), size = 5, alpha = 0.7) +
   geom_smooth(method = "lm", se = TRUE, color = "red", linetype = "dashed") +
-  geom_text(aes(label = City), vjust = -1.2, size = 3.5) +
+  geom_text(aes(label = Canton), vjust = -1.2, size = 3) +
   labs(
-    title = "Cooling Product Sales vs. Temperature",
-    x = "Temperature (°C)",
-    y = "Sales per 5,000 Residents"
+    title = "Gaming Headset Sales vs. Single-Person Household Rate",
+    x = "Single-Person Household Rate (%)",
+    y = "Gaming Headset Sales per 5,000 Residents"
   ) +
   theme_minimal() +
   theme(legend.position = "none")
@@ -106,8 +139,8 @@ ggplot(sales_by_city, aes(x = Temperature, y = Sales_per_5k)) +
 
 ```{r correlation}
 # Correlation analysis
-cor_result <- cor.test(sales_by_city$Temperature, 
-                       sales_by_city$Sales_per_5k, 
+cor_result <- cor.test(analysis_data$Single_Household_Pct, 
+                       analysis_data$Sales_per_5k, 
                        method = "pearson")
 
 cat(sprintf("Correlation coefficient (r): %.3f\n", cor_result$estimate))
@@ -118,7 +151,7 @@ cat(sprintf("Result: %s\n",
                    "No significant correlation")))
 
 # Linear regression
-model <- lm(Sales_per_5k ~ Temperature, data = sales_by_city)
+model <- lm(Sales_per_5k ~ Single_Household_Pct, data = analysis_data)
 cat(sprintf("\nR²: %.3f (%.1f%% variance explained)\n", 
             summary(model)$r.squared,
             summary(model)$r.squared * 100))
@@ -126,8 +159,8 @@ cat(sprintf("\nR²: %.3f (%.1f%% variance explained)\n",
 
 ```{r correlation-matrix, fig.width=8, fig.height=6}
 # Correlation matrix
-cor_data <- sales_by_city %>%
-  select(Temperature, Population, Sales_per_5k)
+cor_data <- analysis_data %>%
+  select(Single_Household_Pct, Population, Sales_per_5k)
 
 cor_matrix <- cor(cor_data, use = "complete.obs")
 
@@ -141,34 +174,41 @@ corrplot(cor_matrix,
          mar = c(0, 0, 2, 0))
 ```
 
-```{r city-ranking}
-# City ranking
-ranking <- sales_by_city %>%
+```{r canton-ranking}
+# Canton ranking
+ranking <- analysis_data %>%
   mutate(
-    Temp_Rank = rank(-Temperature),
+    HH_Rank = rank(-Single_Household_Pct),
     Sales_Rank = rank(-Sales_per_5k)
   ) %>%
-  select(City, Temperature, Temp_Rank, Sales_per_5k, Sales_Rank) %>%
-  arrange(Temp_Rank)
+  select(Canton, Single_Household_Pct, HH_Rank, Sales_per_5k, Sales_Rank) %>%
+  arrange(HH_Rank)
 
 kable(ranking, 
       digits = 2,
-      col.names = c("City", "Temp (°C)", "Temp Rank", 
+      col.names = c("Canton", "Single HH %", "HH Rank", 
                     "Sales per 5k", "Sales Rank"),
-      caption = "City Ranking by Temperature and Sales")
+      caption = "Canton Ranking by Single Households and Gaming Headset Sales")
 ```
 
 # 4. Conclusion
 
-**Hypothesis**: Higher temperatures correlate with higher per-capita sales of cooling products.
+**Hypothesis**: The higher the proportion of people living alone, the higher the demand for gaming headsets.
 
 **Result**: `r ifelse(cor_result$p.value < 0.05, "CONFIRMED", "NOT CONFIRMED")` (r = `r round(cor_result$estimate, 3)`, p = `r round(cor_result$p.value, 4)`)
 
-- **Lugano** (24.8°C): `r round(sales_by_city %>% filter(City == "Lugano") %>% pull(Sales_per_5k), 2)` sales per 5k residents
-- **St. Gallen** (19.6°C): `r round(sales_by_city %>% filter(City == "St. Gallen") %>% pull(Sales_per_5k), 2)` sales per 5k residents
+**Key findings**:
+- Canton with highest single-household rate: `r analysis_data %>% arrange(desc(Single_Household_Pct)) %>% slice(1) %>% pull(Canton)` (`r round(analysis_data %>% arrange(desc(Single_Household_Pct)) %>% slice(1) %>% pull(Single_Household_Pct), 1)`%)
+- Gaming headset sales range: `r round(min(analysis_data$Sales_per_5k), 2)` - `r round(max(analysis_data$Sales_per_5k), 2)` per 5k residents
 
-**Interpretation**: `r ifelse(abs(cor_result$estimate) > 0.5, "Strong", ifelse(abs(cor_result$estimate) > 0.3, "Moderate", "Weak"))` `r ifelse(cor_result$estimate > 0, "positive", "negative")` correlation between temperature and sales.
+**Interpretation**: `r ifelse(abs(cor_result$estimate) > 0.5, "Strong", ifelse(abs(cor_result$estimate) > 0.3, "Moderate", "Weak"))` `r ifelse(cor_result$estimate > 0, "positive", "negative")` correlation between single-person household rate and gaming headset sales.
+
+**Possible explanations**:
+1. **Lifestyle**: People living alone may spend more time gaming
+2. **Urbanization**: High single-household rates often in cities with higher purchasing power
+3. **Age demographics**: Younger people living alone are more likely to game
+4. **Privacy**: Need for headsets when living with others vs. alone
 
 ---
 
-**Data**: Digitec Galaxus (ventilator-168, klimaanlage-280), BFS, MeteoSwiss
+**Data**: Digitec Galaxus (Gaming Headsets), BFS (Single-Person Households 2024)
