@@ -17,34 +17,21 @@ execute:
 
 # Executive Summary
 
-This analysis investigates the relationship between average temperature and sales of fans and cooling devices in eight Swiss cities. The central research question is: **Is there a correlation between higher temperatures and increased sales of cooling products?**
+This analysis investigates the correlation between temperature and sales of cooling products (fans and air conditioners) in eight Swiss cities.
 
-**Main hypothesis**: In warmer regions (especially in Ticino, e.g., Lugano with 24.8°C), more fans and cooling devices are sold than in cooler cities.
+**Research question**: Is there a correlation between temperature and per-capita sales of cooling products?
 
-# 1. Business Problem & Unit of Analysis
+# 1. Data & Method
 
-## 1.1 Problem Statement
+We analyze sales data from Digitec Galaxus for two product categories:
+- **ventilator-168** (Fans)
+- **klimaanlage-280** (Air conditioners)
 
-Digitec Galaxus wants to understand whether and how strongly climatic conditions influence demand for cooling products.
+**Cities analyzed** (8): Zürich, Bern, Luzern, Basel, St. Gallen, Lugano, Lausanne, Genf
 
-## 1.2 Unit of Analysis
-
-The analysis unit is **Swiss cities**. We examine the following eight cities:
-
-1. **Zürich** (ZH) - 436,551 residents, 21.1°C
-2. **Bern** (BE) - 137,995 residents, 20.7°C
-3. **Luzern** (LU) - 86,234 residents, 21.2°C
-4. **Basel** (BS) - 177,571 residents, 22.2°C
-5. **St. Gallen** (SG) - 78,863 residents, 19.6°C
-6. **Lugano** (TI) - 63,629 residents, 24.8°C (warmest city)
-7. **Lausanne** (VD) - 144,873 residents, 22.4°C
-8. **Genf** (GE) - 209,061 residents, 22.5°C
-
-The average temperature refers to the **warmest month** of the year.
+**Method**: Pearson correlation between average temperature (warmest month) and sales per 5,000 residents.
 
 # 2. Data Preparation
-
-## 2.1 Load Packages
 
 ```{r setup}
 # Load packages
@@ -52,66 +39,26 @@ library(tidyverse)
 library(readr)
 library(ggplot2)
 library(knitr)
-library(scales)
 library(corrplot)
 
-# Set options
 options(scipen = 999)
 theme_set(theme_minimal())
 ```
 
-## 2.2 Load Data
-
 ```{r load-data}
-# Load temperature and population data
+# Load data
 temp_data <- read_delim("Temparatur und Anzahl Personen.csv", 
-                        delim = ";", 
-                        locale = locale(encoding = "UTF-8"))
-
-# Rename columns
+                        delim = ";", locale = locale(encoding = "UTF-8"))
 colnames(temp_data) <- c("City", "Population", "Temperature")
 
-# Load sales data
 sales_data <- read_csv("DigitecLive_Cleaned.csv",
                        locale = locale(encoding = "UTF-8"))
-
-kable(temp_data, 
-      caption = "Cities with Population and Average Temperature",
-      format.args = list(big.mark = "'"))
 ```
 
-## 2.3 Filter Cooling Products
-
-We filter products with the following keywords in category or product name:
-
-- **Fans**: ventilator, lüfter, fan
-- **Air conditioners**: klimaanlage, klimagerät, klima, cool, cooling
-
 ```{r filter-cooling-products}
-# Filter cooling products based on category and product name
-cooling_keywords <- c(
-  "ventilator", "lüfter", "luefter", "fan",
-  "klimaanlage", "klimagerät", "klimageraet", "klima",
-  "cool", "cooling", "kühlung", "kuehlung"
-)
-
-# Create regex pattern
-pattern <- paste(cooling_keywords, collapse = "|")
-
-# Filter relevant products
+# Filter for specific cooling product categories
 cooling_sales <- sales_data %>%
-  filter(
-    str_detect(tolower(`infos.Category`), pattern) |
-    str_detect(tolower(fullProductName), pattern)
-  ) %>%
-  # Exclude irrelevant categories
-  filter(
-    !str_detect(tolower(`infos.Category`), "wasserkuehlung|wasserkühlung|cpu-"),
-    !str_detect(tolower(`infos.Category`), "pc-luefter|pc-lüfter"),
-    !str_detect(tolower(`infos.Category`), "luftreiniger"),
-    !str_detect(tolower(fullProductName), "luftreiniger|purifier"),
-    !str_detect(tolower(`infos.Category`), "game-|gaming-controller-zubehoer|heizluefter|heizlüfter|serverschrank-zubehoer")
-  )
+  filter(`infos.Category` %in% c("ventilator-168", "klimaanlage-280"))
 
 # Filter for target cities
 target_cities <- c("Zürich", "Bern", "Luzern", "Basel", 
@@ -120,97 +67,67 @@ target_cities <- c("Zürich", "Bern", "Luzern", "Basel",
 cooling_sales_filtered <- cooling_sales %>%
   filter(cityName_clean %in% target_cities)
 
-cat(sprintf("Filtered products in 8 cities: %d (%.2f%%)\n", 
-            nrow(cooling_sales_filtered), 
-            100 * nrow(cooling_sales_filtered) / nrow(sales_data)))
+cat(sprintf("Total products: %d\n", nrow(cooling_sales_filtered)))
 ```
 
-# 3. Data Analysis
+# 3. Results
 
-## 3.1 Sales by City
-
-```{r sales-by-city}
-# Aggregate sales by city
+```{r analysis}
+# Aggregate sales by city and calculate per-capita sales
 sales_by_city <- cooling_sales_filtered %>%
   group_by(cityName_clean) %>%
-  summarise(
-    Total_Sales = n(),
-    Total_Revenue = sum(`salesPrice.amountIncl`, na.rm = TRUE),
-    Avg_Price = mean(`salesPrice.amountIncl`, na.rm = TRUE),
-    .groups = 'drop'
-  ) %>%
-  rename(City = cityName_clean)
-
-# Merge with temperature data
-analysis_data <- sales_by_city %>%
-  left_join(temp_data, by = "City")
-
-# Calculate sales per 5,000 residents
-analysis_data <- analysis_data %>%
+  summarise(Total_Sales = n(), .groups = 'drop') %>%
+  rename(City = cityName_clean) %>%
+  left_join(temp_data, by = "City") %>%
   mutate(Sales_per_5k = (Total_Sales / Population) * 5000)
 
-kable(analysis_data %>% 
-        select(City, Temperature, Population, Sales_per_5k) %>%
-        arrange(desc(Sales_per_5k)), 
+kable(sales_by_city %>% 
+        select(City, Temperature, Sales_per_5k) %>%
+        arrange(desc(Temperature)), 
       digits = 2,
-      format.args = list(big.mark = "'"),
+      col.names = c("City", "Temp (°C)", "Sales per 5k"),
       caption = "Sales per 5,000 Residents by City")
 ```
 
-## 3.2 Visualization: Sales vs. Temperature
-
-```{r plot-normalized, fig.width=10, fig.height=6}
-# Normalized sales vs. temperature
-ggplot(analysis_data, aes(x = Temperature, y = Sales_per_5k)) +
+```{r plot, fig.width=10, fig.height=6}
+# Visualization
+ggplot(sales_by_city, aes(x = Temperature, y = Sales_per_5k)) +
   geom_point(aes(color = City), size = 5, alpha = 0.7) +
   geom_smooth(method = "lm", se = TRUE, color = "red", linetype = "dashed") +
   geom_text(aes(label = City), vjust = -1.2, size = 3.5) +
   labs(
-    title = "Cooling Product Sales by Temperature",
-    subtitle = "Sales per 5,000 Residents",
-    x = "Average Temperature of Warmest Month (°C)",
-    y = "Sales per 5,000 Residents",
-    color = "City"
+    title = "Cooling Product Sales vs. Temperature",
+    x = "Temperature (°C)",
+    y = "Sales per 5,000 Residents"
   ) +
   theme_minimal() +
-  theme(legend.position = "bottom")
+  theme(legend.position = "none")
 ```
 
-# 4. Correlation Analysis
-
-## 4.1 Pearson Correlation
-
-```{r correlation-analysis}
-# Correlation between temperature and normalized sales
-cor_result <- cor.test(analysis_data$Temperature, 
-                       analysis_data$Sales_per_5k, 
+```{r correlation}
+# Correlation analysis
+cor_result <- cor.test(sales_by_city$Temperature, 
+                       sales_by_city$Sales_per_5k, 
                        method = "pearson")
-
-cat("CORRELATION ANALYSIS\n")
-cat("====================\n\n")
 
 cat(sprintf("Correlation coefficient (r): %.3f\n", cor_result$estimate))
 cat(sprintf("p-value: %.4f\n", cor_result$p.value))
-cat(sprintf("Interpretation: %s\n", 
+cat(sprintf("Result: %s\n", 
             ifelse(cor_result$p.value < 0.05, 
                    "Significant correlation (p < 0.05)", 
-                   "No significant correlation (p >= 0.05)")))
+                   "No significant correlation")))
+
+# Linear regression
+model <- lm(Sales_per_5k ~ Temperature, data = sales_by_city)
+cat(sprintf("\nR²: %.3f (%.1f%% variance explained)\n", 
+            summary(model)$r.squared,
+            summary(model)$r.squared * 100))
 ```
-
-## 4.2 Linear Regression
-
-```{r linear-regression}
-# Linear model: normalized sales ~ temperature
-model <- lm(Sales_per_5k ~ Temperature, data = analysis_data)
-summary(model)
-```
-
-## 4.3 Correlation Matrix
 
 ```{r correlation-matrix, fig.width=8, fig.height=6}
 # Correlation matrix
-cor_data <- analysis_data %>%
-  select(Temperature, Population, Sales_per_5k, Avg_Price)
+cor_data <- sales_by_city %>%
+  select(Temperature, Population, Sales_per_5k)
 
 cor_matrix <- cor(cor_data, use = "complete.obs")
 
@@ -224,13 +141,9 @@ corrplot(cor_matrix,
          mar = c(0, 0, 2, 0))
 ```
 
-# 5. City Comparison
-
-## 5.1 City Ranking
-
 ```{r city-ranking}
-# Ranking by temperature and sales
-ranking <- analysis_data %>%
+# City ranking
+ranking <- sales_by_city %>%
   mutate(
     Temp_Rank = rank(-Temperature),
     Sales_Rank = rank(-Sales_per_5k)
@@ -240,102 +153,22 @@ ranking <- analysis_data %>%
 
 kable(ranking, 
       digits = 2,
-      format.args = list(big.mark = "'"),
       col.names = c("City", "Temp (°C)", "Temp Rank", 
                     "Sales per 5k", "Sales Rank"),
       caption = "City Ranking by Temperature and Sales")
 ```
 
-## 5.2 Ticino vs. Other Cities
+# 4. Conclusion
 
-```{r ticino-comparison}
-# Lugano (Ticino) vs. other cities
-lugano <- analysis_data %>% filter(City == "Lugano")
-others <- analysis_data %>% filter(City != "Lugano")
+**Hypothesis**: Higher temperatures correlate with higher per-capita sales of cooling products.
 
-cat(sprintf("Lugano (Ticino):        %.2f sales per 5,000 residents\n", lugano$Sales_per_5k))
-cat(sprintf("Other cities (average): %.2f sales per 5,000 residents\n", mean(others$Sales_per_5k)))
-cat(sprintf("Difference:             %.2f (%.1f%% %s)\n", 
-            lugano$Sales_per_5k - mean(others$Sales_per_5k),
-            abs((lugano$Sales_per_5k / mean(others$Sales_per_5k) - 1) * 100),
-            ifelse(lugano$Sales_per_5k > mean(others$Sales_per_5k), "higher", "lower")))
-```
+**Result**: `r ifelse(cor_result$p.value < 0.05, "CONFIRMED", "NOT CONFIRMED")` (r = `r round(cor_result$estimate, 3)`, p = `r round(cor_result$p.value, 4)`)
 
-# 6. Temporal Analysis
+- **Lugano** (24.8°C): `r round(sales_by_city %>% filter(City == "Lugano") %>% pull(Sales_per_5k), 2)` sales per 5k residents
+- **St. Gallen** (19.6°C): `r round(sales_by_city %>% filter(City == "St. Gallen") %>% pull(Sales_per_5k), 2)` sales per 5k residents
 
-```{r temporal-analysis, fig.width=10, fig.height=5}
-# Sales by month
-cooling_sales_filtered <- cooling_sales_filtered %>%
-  mutate(
-    date = as.Date(dateTime),
-    month = format(date, "%Y-%m")
-  )
-
-monthly_sales <- cooling_sales_filtered %>%
-  filter(cityName_clean %in% c("Zürich", "Lugano", "St. Gallen")) %>%
-  count(month, cityName_clean) %>%
-  mutate(month_date = as.Date(paste0(month, "-01")))
-
-ggplot(monthly_sales, aes(x = month_date, y = n, color = cityName_clean)) +
-  geom_line(linewidth = 1) +
-  geom_point(size = 2) +
-  scale_x_date(date_labels = "%b %Y", date_breaks = "1 month") +
-  labs(
-    title = "Cooling Product Sales Over Time",
-    subtitle = "Comparison: Zürich, Lugano (Ticino), and St. Gallen",
-    x = "Month",
-    y = "Number of Sales",
-    color = "City"
-  ) +
-  theme_minimal() +
-  theme(
-    axis.text.x = element_text(angle = 45, hjust = 1),
-    legend.position = "bottom"
-  )
-```
-
-# 7. Conclusions
-
-## 7.1 Key Findings
-
-```{r conclusion-stats}
-cat("KEY FINDINGS\n")
-cat("============\n\n")
-
-cat(sprintf("1. Correlation (Temperature - Sales): r = %.3f (p = %.4f)\n", 
-            cor_result$estimate, cor_result$p.value))
-
-cat(sprintf("\n2. Lugano (warmest city, 24.8°C): %.2f sales per 5k residents\n", 
-            analysis_data %>% filter(City == "Lugano") %>% pull(Sales_per_5k)))
-
-cat(sprintf("\n3. St. Gallen (coolest city, 19.6°C): %.2f sales per 5k residents\n", 
-            analysis_data %>% filter(City == "St. Gallen") %>% pull(Sales_per_5k)))
-
-cat(sprintf("\n4. Temperature difference: %.1f°C\n", 
-            max(analysis_data$Temperature) - min(analysis_data$Temperature)))
-
-cat(sprintf("\n5. R²: %.3f (%.1f%% of variance explained by temperature)\n", 
-            summary(model)$r.squared,
-            summary(model)$r.squared * 100))
-```
-
-## 7.2 Interpretation
-
-**Hypothesis**: In Ticino, more cooling products are sold than in cooler regions.
-
-**Result**: `r ifelse(cor_result$p.value < 0.05, "Hypothesis CONFIRMED", "Hypothesis NOT confirmed")` (p `r ifelse(cor_result$p.value < 0.05, "<", ">=")` 0.05)
-
-The analysis shows `r ifelse(abs(cor_result$estimate) > 0.5, "a strong", ifelse(abs(cor_result$estimate) > 0.3, "a moderate", "a weak"))` `r ifelse(cor_result$estimate > 0, "positive", "negative")` correlation between average temperature and normalized sales.
-
-**Possible explanations:**
-
-1. **Temperature effect**: Higher temperatures lead to increased cooling demand
-2. **Purchasing power differences**: Regional differences in income and buying behavior
-3. **Urbanization**: City size and population density influence sales
-4. **Seasonality**: Sales concentrate in summer months
-5. **Data availability**: Limited sample (only 8 cities)
+**Interpretation**: `r ifelse(abs(cor_result$estimate) > 0.5, "Strong", ifelse(abs(cor_result$estimate) > 0.3, "Moderate", "Weak"))` `r ifelse(cor_result$estimate > 0, "positive", "negative")` correlation between temperature and sales.
 
 ---
 
-**Created with**: Quarto, R, tidyverse, ggplot2  
-**Data sources**: Digitec Galaxus Social Shopping Data, BFS Population Statistics, MeteoSwiss
+**Data**: Digitec Galaxus (ventilator-168, klimaanlage-280), BFS, MeteoSwiss
