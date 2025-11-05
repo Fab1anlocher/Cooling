@@ -99,15 +99,13 @@ Wir filtern Produkte mit folgenden Schlüsselwörtern in Kategorie oder Produktn
 
 - **Ventilatoren**: ventilator, lüfter, fan
 - **Klimageräte**: klimaanlage, klimagerät, klima, cool, cooling
-- **Luftreiniger**: luftreiniger (mit Kühlfunktion)
 
 ```{r filter-cooling-products}
 # Produktfilterung basierend auf Kategorie und Produktname
 cooling_keywords <- c(
   "ventilator", "lüfter", "luefter", "fan",
   "klimaanlage", "klimagerät", "klimageraet", "klima",
-  "cool", "cooling", "kühlung", "kuehlung",
-  "luftreiniger.*cool", "luftreiniger.*hot"
+  "cool", "cooling", "kühlung", "kuehlung"
 )
 
 # Regex-Pattern erstellen
@@ -119,10 +117,12 @@ cooling_sales <- sales_data %>%
     str_detect(tolower(`infos.Category`), pattern) |
     str_detect(tolower(fullProductName), pattern)
   ) %>%
-  # Nur relevante Kategorien behalten (keine PC-Wasserkühlung, etc.)
+  # Nur relevante Kategorien behalten (keine PC-Wasserkühlung, Luftreiniger, etc.)
   filter(
     !str_detect(tolower(`infos.Category`), "wasserkuehlung|wasserkühlung|cpu-"),
-    !str_detect(tolower(`infos.Category`), "pc-luefter|pc-lüfter")
+    !str_detect(tolower(`infos.Category`), "pc-luefter|pc-lüfter"),
+    !str_detect(tolower(`infos.Category`), "luftreiniger"),
+    !str_detect(tolower(fullProductName), "luftreiniger|purifier")
   )
 
 cat(sprintf("Gefilterte Produkte: %d von %d (%.2f%%)\n", 
