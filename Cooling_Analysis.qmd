@@ -1,0 +1,544 @@
+---
+title: "Klimabedingte Verkaufsanalyse: Ventilatoren und Kühlgeräte"
+subtitle: "Einfluss der Temperatur auf Produktverkäufe in Schweizer Städten"
+author: "Cooling Analysis Team"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-title: "Inhaltsverzeichnis"
+    code-fold: true
+    code-summary: "Code anzeigen"
+    theme: cosmo
+    embed-resources: true
+  pdf:
+    toc: true
+    number-sections: true
+    colorlinks: true
+execute:
+  warning: false
+  message: false
+---
+
+# Executive Summary
+
+Diese Analyse untersucht den Zusammenhang zwischen Durchschnittstemperatur und Verkaufszahlen von Ventilatoren und Kühlgeräten in acht Schweizer Städten. Die zentrale Forschungsfrage lautet: **Gibt es eine Korrelation zwischen höheren Temperaturen und verstärkten Verkäufen von Kühlprodukten?**
+
+**Haupthypothese**: In wärmeren Regionen (insbesondere im Tessin, z.B. Lugano mit 24.8°C) werden mehr Ventilatoren und Kühlgeräte verkauft als in kühleren Städten.
+
+# 1. Business Problem & Unit of Analysis
+
+## 1.1 Problemstellung
+
+Digitec Galaxus möchte verstehen, ob und wie stark die klimatischen Bedingungen die Nachfrage nach Kühlprodukten beeinflussen. Diese Erkenntnisse können verwendet werden für:
+
+- **Bestandsmanagement**: Optimierung der Lagerhaltung basierend auf lokalen Temperaturen
+- **Marketing-Strategien**: Gezielte Werbekampagnen in wärmeren Regionen
+- **Pricing-Strategien**: Dynamische Preisgestaltung basierend auf Wetterbedingungen
+- **Produktsortiment**: Anpassung des Angebots je nach Region
+
+## 1.2 Unit of Analysis
+
+Die Analyseeinheit sind **Schweizer Städte**. Wir untersuchen folgende acht Städte:
+
+1. **Zürich** (ZH) - 436,551 Einwohner, 21.1°C
+2. **Bern** (BE) - 137,995 Einwohner, 20.7°C
+3. **Luzern** (LU) - 86,234 Einwohner, 21.2°C
+4. **Basel** (BS) - 177,571 Einwohner, 22.2°C
+5. **St. Gallen** (SG) - 78,863 Einwohner, 19.6°C
+6. **Lugano** (TI) - 63,629 Einwohner, 24.8°C (wärmste Stadt)
+7. **Lausanne** (VD) - 144,873 Einwohner, 22.4°C
+8. **Genf** (GE) - 209,061 Einwohner, 22.5°C
+
+Die Durchschnittstemperatur bezieht sich auf den **wärmsten Monat** des Jahres.
+
+# 2. Datenaufbereitung
+
+## 2.1 Laden der erforderlichen Pakete
+
+```{r setup}
+# Pakete laden
+library(tidyverse)
+library(readr)
+library(ggplot2)
+library(knitr)
+library(scales)
+library(corrplot)
+library(gridExtra)
+
+# Optionen setzen
+options(scipen = 999)  # Wissenschaftliche Notation ausschalten
+theme_set(theme_minimal())
+```
+
+## 2.2 Daten einlesen
+
+```{r load-data}
+# Temperaturdaten und Bevölkerungsdaten einlesen
+temp_data <- read_delim("Temparatur und Anzahl Personen.csv", 
+                        delim = ";", 
+                        locale = locale(encoding = "UTF-8"))
+
+# Spalten umbenennen für einfachere Handhabung
+colnames(temp_data) <- c("Stadt", "Bevoelkerung", "Temperatur")
+
+# Verkaufsdaten einlesen
+sales_data <- read_csv("DigitecLive_Cleaned.csv",
+                       locale = locale(encoding = "UTF-8"))
+
+# Überblick über die Daten
+kable(temp_data, 
+      caption = "Städte mit Bevölkerung und Durchschnittstemperatur",
+      format.args = list(big.mark = "'"))
+```
+
+## 2.3 Filterung der Kühlprodukte
+
+Wir filtern Produkte mit folgenden Schlüsselwörtern in Kategorie oder Produktname:
+
+- **Ventilatoren**: ventilator, lüfter, fan
+- **Klimageräte**: klimaanlage, klimagerät, klima, cool, cooling
+- **Luftreiniger**: luftreiniger (mit Kühlfunktion)
+
+```{r filter-cooling-products}
+# Produktfilterung basierend auf Kategorie und Produktname
+cooling_keywords <- c(
+  "ventilator", "lüfter", "luefter", "fan",
+  "klimaanlage", "klimagerät", "klimageraet", "klima",
+  "cool", "cooling", "kühlung", "kuehlung",
+  "luftreiniger.*cool", "luftreiniger.*hot"
+)
+
+# Regex-Pattern erstellen
+pattern <- paste(cooling_keywords, collapse = "|")
+
+# Filtern
+cooling_sales <- sales_data %>%
+  filter(
+    str_detect(tolower(`infos.Category`), pattern) |
+    str_detect(tolower(fullProductName), pattern)
+  ) %>%
+  # Nur relevante Kategorien behalten (keine PC-Wasserkühlung, etc.)
+  filter(
+    !str_detect(tolower(`infos.Category`), "wasserkuehlung|wasserkühlung|cpu-"),
+    !str_detect(tolower(`infos.Category`), "pc-luefter|pc-lüfter")
+  )
+
+cat(sprintf("Gefilterte Produkte: %d von %d (%.2f%%)\n", 
+            nrow(cooling_sales), 
+            nrow(sales_data),
+            100 * nrow(cooling_sales) / nrow(sales_data)))
+
+# Top-Kategorien anzeigen
+cooling_sales %>%
+  count(`infos.Category`, sort = TRUE) %>%
+  head(10) %>%
+  kable(caption = "Top 10 Produktkategorien nach Anzahl Verkäufe",
+        col.names = c("Kategorie", "Anzahl Verkäufe"))
+```
+
+## 2.4 Stadt-Mapping
+
+```{r city-mapping}
+# Mapping zwischen cityName_clean und den 8 Zielstädten
+# Da die Daten möglicherweise Vororte enthalten, müssen wir klären,
+# welche Orte zu welcher Stadt gehören
+
+# Beispiel-Städte anzeigen
+unique_cities <- cooling_sales %>%
+  distinct(cityName_clean, canton) %>%
+  arrange(canton, cityName_clean)
+
+cat("Anzahl eindeutiger Orte in den Verkaufsdaten:", nrow(unique_cities), "\n")
+
+# Für diese Analyse verwenden wir nur exakte Übereinstimmungen
+target_cities <- c("Zürich", "Bern", "Luzern", "Basel", 
+                   "St. Gallen", "Lugano", "Lausanne", "Genf")
+
+# Filtern auf die Zielstädte
+cooling_sales_filtered <- cooling_sales %>%
+  filter(cityName_clean %in% target_cities)
+
+cat(sprintf("\nVerkäufe in den 8 Zielstädten: %d von %d (%.2f%%)\n", 
+            nrow(cooling_sales_filtered), 
+            nrow(cooling_sales),
+            100 * nrow(cooling_sales_filtered) / nrow(cooling_sales)))
+```
+
+# 3. Explorative Datenanalyse
+
+## 3.1 Verkäufe nach Stadt
+
+```{r sales-by-city}
+# Verkäufe aggregieren nach Stadt
+sales_by_city <- cooling_sales_filtered %>%
+  group_by(cityName_clean) %>%
+  summarise(
+    Anzahl_Verkaeufe = n(),
+    Gesamtumsatz = sum(`salesPrice.amountIncl`, na.rm = TRUE),
+    Durchschnittspreis = mean(`salesPrice.amountIncl`, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  rename(Stadt = cityName_clean)
+
+# Mit Temperaturdaten verbinden
+analysis_data <- sales_by_city %>%
+  left_join(temp_data, by = "Stadt")
+
+kable(analysis_data, 
+      digits = 2,
+      format.args = list(big.mark = "'"),
+      caption = "Verkaufsdaten und Temperaturen nach Stadt")
+```
+
+## 3.2 Visualisierung: Verkäufe vs. Temperatur
+
+```{r plot-sales-temp, fig.width=10, fig.height=6}
+# Absolute Verkaufszahlen vs. Temperatur
+p1 <- ggplot(analysis_data, aes(x = Temperatur, y = Anzahl_Verkaeufe)) +
+  geom_point(aes(size = Bevoelkerung, color = Stadt), alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE, color = "red", linetype = "dashed") +
+  geom_text(aes(label = Stadt), vjust = -1, size = 3) +
+  scale_size_continuous(labels = label_number(big.mark = "'")) +
+  labs(
+    title = "Verkäufe von Kühlprodukten nach Temperatur",
+    subtitle = "Absolute Anzahl Verkäufe",
+    x = "Durchschnittstemperatur des wärmsten Monats (°C)",
+    y = "Anzahl Verkäufe",
+    size = "Bevölkerung",
+    color = "Stadt"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+print(p1)
+```
+
+## 3.3 Normalisierung nach Bevölkerungsgröße
+
+Um faire Vergleiche zwischen Städten unterschiedlicher Größe zu ermöglichen, berechnen wir **Verkäufe pro 10,000 Einwohner**.
+
+```{r normalized-sales}
+# Verkäufe pro 10.000 Einwohner
+analysis_data <- analysis_data %>%
+  mutate(
+    Verkaeufe_pro_10k = (Anzahl_Verkaeufe / Bevoelkerung) * 10000,
+    Umsatz_pro_10k = (Gesamtumsatz / Bevoelkerung) * 10000
+  )
+
+kable(analysis_data %>% 
+        select(Stadt, Temperatur, Anzahl_Verkaeufe, 
+               Verkaeufe_pro_10k, Umsatz_pro_10k) %>%
+        arrange(desc(Verkaeufe_pro_10k)), 
+      digits = 2,
+      format.args = list(big.mark = "'"),
+      caption = "Normalisierte Verkaufsdaten (pro 10,000 Einwohner)")
+```
+
+```{r plot-normalized, fig.width=10, fig.height=6}
+# Normalisierte Verkäufe vs. Temperatur
+p2 <- ggplot(analysis_data, aes(x = Temperatur, y = Verkaeufe_pro_10k)) +
+  geom_point(aes(color = Stadt), size = 5, alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE, color = "red", linetype = "dashed") +
+  geom_text(aes(label = Stadt), vjust = -1.2, size = 3.5) +
+  labs(
+    title = "Verkäufe von Kühlprodukten nach Temperatur (normalisiert)",
+    subtitle = "Verkäufe pro 10,000 Einwohner",
+    x = "Durchschnittstemperatur des wärmsten Monats (°C)",
+    y = "Verkäufe pro 10,000 Einwohner",
+    color = "Stadt"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+print(p2)
+```
+
+## 3.4 Vergleich: Absolute vs. Normalisierte Werte
+
+```{r comparison-plot, fig.width=12, fig.height=5}
+grid.arrange(p1 + theme(legend.position = "none"), 
+             p2 + theme(legend.position = "none"), 
+             ncol = 2)
+```
+
+# 4. Korrelationsanalyse
+
+## 4.1 Pearson-Korrelation
+
+```{r correlation-analysis}
+# Korrelation zwischen Temperatur und absoluten Verkäufen
+cor_absolute <- cor.test(analysis_data$Temperatur, 
+                         analysis_data$Anzahl_Verkaeufe, 
+                         method = "pearson")
+
+# Korrelation zwischen Temperatur und normalisierten Verkäufen
+cor_normalized <- cor.test(analysis_data$Temperatur, 
+                           analysis_data$Verkaeufe_pro_10k, 
+                           method = "pearson")
+
+# Ergebnisse ausgeben
+cat("Korrelationsanalyse:\n")
+cat("===================\n\n")
+
+cat("1. Absolute Verkäufe vs. Temperatur:\n")
+cat(sprintf("   Korrelationskoeffizient (r): %.3f\n", cor_absolute$estimate))
+cat(sprintf("   p-Wert: %.4f\n", cor_absolute$p.value))
+cat(sprintf("   Interpretation: %s\n", 
+            ifelse(cor_absolute$p.value < 0.05, 
+                   "Signifikanter Zusammenhang (p < 0.05)", 
+                   "Kein signifikanter Zusammenhang (p >= 0.05)")))
+cat("\n")
+
+cat("2. Normalisierte Verkäufe vs. Temperatur:\n")
+cat(sprintf("   Korrelationskoeffizient (r): %.3f\n", cor_normalized$estimate))
+cat(sprintf("   p-Wert: %.4f\n", cor_normalized$p.value))
+cat(sprintf("   Interpretation: %s\n", 
+            ifelse(cor_normalized$p.value < 0.05, 
+                   "Signifikanter Zusammenhang (p < 0.05)", 
+                   "Kein signifikanter Zusammenhang (p >= 0.05)")))
+```
+
+## 4.2 Lineare Regression
+
+```{r linear-regression}
+# Lineares Modell: Normalisierte Verkäufe ~ Temperatur
+model <- lm(Verkaeufe_pro_10k ~ Temperatur, data = analysis_data)
+
+# Modellzusammenfassung
+summary(model)
+
+# Konfidenzintervalle
+confint(model)
+```
+
+```{r regression-diagnostics, fig.width=10, fig.height=8}
+# Diagnose-Plots
+par(mfrow = c(2, 2))
+plot(model)
+par(mfrow = c(1, 1))
+```
+
+## 4.3 Korrelationsmatrix (alle Variablen)
+
+```{r correlation-matrix, fig.width=8, fig.height=6}
+# Korrelationsmatrix erstellen
+cor_data <- analysis_data %>%
+  select(Temperatur, Bevoelkerung, Anzahl_Verkaeufe, 
+         Verkaeufe_pro_10k, Durchschnittspreis)
+
+cor_matrix <- cor(cor_data, use = "complete.obs")
+
+# Visualisierung
+corrplot(cor_matrix, 
+         method = "color",
+         type = "upper",
+         addCoef.col = "black",
+         tl.col = "black",
+         tl.srt = 45,
+         title = "Korrelationsmatrix: Temperatur und Verkaufsdaten",
+         mar = c(0, 0, 2, 0))
+```
+
+# 5. Detaillierte Stadt-Analyse
+
+## 5.1 Ranking der Städte
+
+```{r city-ranking}
+# Ranking nach verschiedenen Metriken
+ranking <- analysis_data %>%
+  mutate(
+    Rang_Temperatur = rank(-Temperatur),
+    Rang_Absolute_Verkaeufe = rank(-Anzahl_Verkaeufe),
+    Rang_Normalisierte_Verkaeufe = rank(-Verkaeufe_pro_10k)
+  ) %>%
+  select(Stadt, Temperatur, Rang_Temperatur, 
+         Anzahl_Verkaeufe, Rang_Absolute_Verkaeufe,
+         Verkaeufe_pro_10k, Rang_Normalisierte_Verkaeufe) %>%
+  arrange(Rang_Temperatur)
+
+kable(ranking, 
+      digits = 2,
+      format.args = list(big.mark = "'"),
+      caption = "Stadt-Ranking nach verschiedenen Metriken")
+```
+
+## 5.2 Vergleich: Tessin vs. Rest der Schweiz
+
+```{r ticino-comparison}
+# Lugano (Tessin) vs. andere Städte
+analysis_data <- analysis_data %>%
+  mutate(Region = ifelse(Stadt == "Lugano", "Tessin (Lugano)", "Andere Städte"))
+
+region_summary <- analysis_data %>%
+  group_by(Region) %>%
+  summarise(
+    Anzahl_Staedte = n(),
+    Durchschnitt_Temperatur = mean(Temperatur),
+    Durchschnitt_Verkaeufe_pro_10k = mean(Verkaeufe_pro_10k),
+    .groups = 'drop'
+  )
+
+kable(region_summary, 
+      digits = 2,
+      caption = "Vergleich: Tessin (Lugano) vs. andere Städte")
+
+# Vergleich der Verkaufszahlen
+lugano_data <- analysis_data %>% filter(Stadt == "Lugano")
+other_data <- analysis_data %>% filter(Stadt != "Lugano")
+
+cat("\nVergleich der durchschnittlichen normalisierten Verkäufe:\n")
+cat(sprintf("Lugano: %.2f Verkäufe pro 10,000 Einwohner\n", 
+            lugano_data$Verkaeufe_pro_10k))
+cat(sprintf("Durchschnitt andere Städte: %.2f Verkäufe pro 10,000 Einwohner\n", 
+            mean(other_data$Verkaeufe_pro_10k)))
+cat(sprintf("Differenz: %.2f (%.1f%% %s)\n", 
+            lugano_data$Verkaeufe_pro_10k - mean(other_data$Verkaeufe_pro_10k),
+            abs((lugano_data$Verkaeufe_pro_10k / mean(other_data$Verkaeufe_pro_10k) - 1) * 100),
+            ifelse(lugano_data$Verkaeufe_pro_10k > mean(other_data$Verkaeufe_pro_10k), "höher", "niedriger")))
+```
+
+## 5.3 Verkäufe nach Produktkategorie und Stadt
+
+```{r category-city, fig.width=12, fig.height=6}
+# Top-Kategorien pro Stadt
+category_city <- cooling_sales_filtered %>%
+  filter(cityName_clean %in% target_cities) %>%
+  count(cityName_clean, `infos.Category`, sort = TRUE) %>%
+  group_by(cityName_clean) %>%
+  slice_max(n, n = 3) %>%
+  ungroup()
+
+ggplot(category_city, 
+       aes(x = reorder(cityName_clean, n), y = n, fill = `infos.Category`)) +
+  geom_col(position = "dodge") +
+  coord_flip() +
+  labs(
+    title = "Top 3 Kühlprodukt-Kategorien pro Stadt",
+    x = "Stadt",
+    y = "Anzahl Verkäufe",
+    fill = "Kategorie"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+# 6. Zeitliche Analyse
+
+```{r temporal-analysis, fig.width=12, fig.height=6}
+# Verkäufe nach Monat (aus DateTime extrahieren)
+cooling_sales_filtered <- cooling_sales_filtered %>%
+  mutate(
+    date = as.Date(dateTime),
+    month = format(date, "%Y-%m"),
+    month_num = as.numeric(format(date, "%m"))
+  )
+
+# Verkäufe nach Monat und Stadt
+monthly_sales <- cooling_sales_filtered %>%
+  filter(cityName_clean %in% c("Zürich", "Lugano", "St. Gallen")) %>%
+  count(month, cityName_clean) %>%
+  mutate(month_date = as.Date(paste0(month, "-01")))
+
+ggplot(monthly_sales, aes(x = month_date, y = n, color = cityName_clean)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "1 month") +
+  labs(
+    title = "Zeitlicher Verlauf der Kühlprodukt-Verkäufe",
+    subtitle = "Vergleich: Zürich, Lugano (Tessin) und St. Gallen",
+    x = "Monat",
+    y = "Anzahl Verkäufe",
+    color = "Stadt"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom"
+  )
+```
+
+# 7. Schlussfolgerungen und Empfehlungen
+
+## 7.1 Wichtigste Erkenntnisse
+
+Basierend auf der durchgeführten Analyse können wir folgende Schlussfolgerungen ziehen:
+
+```{r conclusion-stats}
+# Wichtigste Statistiken zusammenfassen
+cat("WICHTIGSTE ERKENNTNISSE:\n")
+cat("========================\n\n")
+
+cat(sprintf("1. Korrelation Temperatur-Verkäufe (normalisiert): r = %.3f (p = %.4f)\n", 
+            cor_normalized$estimate, cor_normalized$p.value))
+
+cat(sprintf("\n2. Lugano (wärmste Stadt, 24.8°C):\n"))
+cat(sprintf("   - Verkäufe pro 10k Einwohner: %.2f\n", 
+            analysis_data %>% filter(Stadt == "Lugano") %>% pull(Verkaeufe_pro_10k)))
+
+cat(sprintf("\n3. St. Gallen (kühlste Stadt, 19.6°C):\n"))
+cat(sprintf("   - Verkäufe pro 10k Einwohner: %.2f\n", 
+            analysis_data %>% filter(Stadt == "St. Gallen") %>% pull(Verkaeufe_pro_10k)))
+
+cat(sprintf("\n4. Temperaturdifferenz: %.1f°C\n", 
+            max(analysis_data$Temperatur) - min(analysis_data$Temperatur)))
+
+cat(sprintf("\n5. R² des Regressionsmodells: %.3f\n", 
+            summary(model)$r.squared))
+cat(sprintf("   (%.1f%% der Varianz wird durch Temperatur erklärt)\n", 
+            summary(model)$r.squared * 100))
+```
+
+## 7.2 Interpretation
+
+**Hypothese**: Im Tessin werden mehr Kühlprodukte verkauft als in kühleren Regionen.
+
+**Ergebnis**: `r ifelse(cor_normalized$p.value < 0.05, "Die Hypothese wird BESTÄTIGT", "Die Hypothese wird NICHT bestätigt")` (p `r ifelse(cor_normalized$p.value < 0.05, "<", ">=")` 0.05)
+
+Die Analyse zeigt `r ifelse(abs(cor_normalized$estimate) > 0.5, "eine starke", ifelse(abs(cor_normalized$estimate) > 0.3, "eine moderate", "eine schwache"))` `r ifelse(cor_normalized$estimate > 0, "positive", "negative")` Korrelation zwischen Durchschnittstemperatur und normalisierten Verkaufszahlen.
+
+**Mögliche Erklärungen:**
+
+1. **Temperatureffekt**: Höhere Temperaturen führen zu erhöhtem Kühlbedarf
+2. **Kaufkraftunterschiede**: Regionale Unterschiede in Einkommen und Kaufverhalten
+3. **Urbanisierung**: Städtegröße und Bevölkerungsdichte beeinflussen Verkäufe
+4. **Saisonalität**: Verkäufe konzentrieren sich auf Sommermonate
+5. **Datenverfügbarkeit**: Limitierte Stichprobe (nur 8 Städte)
+
+## 7.3 Business-Empfehlungen
+
+1. **Regionales Bestandsmanagement**
+   - Höhere Lagerbestände in wärmeren Regionen (Tessin, Genf, Lausanne)
+   - Niedrigere Bestände in kühleren Regionen (St. Gallen)
+
+2. **Marketing-Strategien**
+   - Gezielte Online-Werbekampagnen basierend auf Wettervorhersagen
+   - Verstärkte Bewerbung in wärmeren Kantonen während Sommermonate
+
+3. **Dynamisches Pricing**
+   - Preisanpassungen basierend auf regionalen Temperaturen
+   - Saisonale Rabatte in kühleren Regionen zur Nachfragestimulierung
+
+4. **Sortimentsanpassung**
+   - Breiteres Angebot an Premium-Kühlgeräten in wärmeren Regionen
+   - Fokus auf kompakte/günstigere Modelle in kühleren Regionen
+
+5. **Weitere Analysen**
+   - Einbeziehung von Tagesdaten (nicht nur Monatsdurchschnitte)
+   - Erweiterung auf alle Schweizer Kantone
+   - Berücksichtigung von Hitzewellen und extremen Wetterereignissen
+
+# 8. Limitationen
+
+- **Stichprobengröße**: Nur 8 Städte analysiert
+- **Aggregationsniveau**: Stadt-Level (keine Quartiersanalyse)
+- **Zeitraum**: Daten aus 2023 (kein Mehrjahresvergleich)
+- **Produktfilterung**: Möglicherweise wurden relevante Produkte übersehen
+- **Weitere Faktoren**: Einkommen, Wohnungsgröße, Klimaanlagen-Verbreitung nicht berücksichtigt
+
+---
+
+**Erstellt mit**: Quarto, R, tidyverse, ggplot2  
+**Datenquellen**: Digitec Galaxus Social Shopping Daten, BFS Bevölkerungsstatistik, MeteoSchweiz  
+**Datum**: `r format(Sys.Date(), "%d.%m.%Y")`
